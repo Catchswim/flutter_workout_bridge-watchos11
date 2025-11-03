@@ -36,7 +36,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
     private let healthStore = HKHealthStore()
     private var pendingResult: FlutterResult?
 
-    private var previewFactoryRegistered = false
+    private static var previewFactoryRegistered = false
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "flutter_workout_bridge", binaryMessenger: registrar.messenger())
@@ -48,6 +48,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 if !previewFactoryRegistered {
                 let factory = WorkoutPreviewViewFactory(messenger: registrar.messenger())
                 registrar.register(factory, withId: "workout_preview_button")
+                previewFactoryRegistered = true
                 }
         }
     }
