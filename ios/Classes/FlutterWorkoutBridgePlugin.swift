@@ -24,12 +24,19 @@ enum WorkoutError: Error {
     }
 }
 
+@available(iOS 17.0, *)
+private func localized(_ raw: String) -> LocalizedStringResource {
+    LocalizedStringResource(stringLiteral: raw)
+}
+
 // MARK: - Main Plugin Class
 
 public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
     private let healthStore = HKHealthStore()
     private var pendingResult: FlutterResult?
+
+    private var previewFactoryRegistered = false
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "flutter_workout_bridge", binaryMessenger: registrar.messenger())
@@ -38,8 +45,10 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
         // Register the workout preview view factory
         if #available(iOS 17.0, *) {
-            let factory = WorkoutPreviewViewFactory(messenger: registrar.messenger())
-            registrar.register(factory, withId: "workout_preview_button")
+                if !previewFactoryRegistered {
+                let factory = WorkoutPreviewViewFactory(messenger: registrar.messenger())
+                registrar.register(factory, withId: "workout_preview_button")
+                }
         }
     }
 
@@ -269,12 +278,27 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         return createCustomWorkout(
             activity: activityType,
             location: location,
-            displayName: name,
+            displayName: localized(name),
             warmup: warmupStep,
             blocks: intervalBlocks,
             cooldown: cooldownStep
         )
     }
+
+    }
+
+    private func extractDisplayRepresentation(from stepData: [String: Any]) -> DisplayRepresentation? {
+    let possibleKeys = ["displayName", "title", "name", "detail"]
+    for key in possibleKeys {
+        if let value = stepData[key] as? String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return DisplayRepresentation(title: localized(trimmed))
+            }
+        }
+    }
+    return nil
+}
 
     @available(iOS 17.0, *)
     private func parseWorkoutStep(stepData: [String: Any], stepType: WorkoutStepType) throws -> IntervalStep {
@@ -448,6 +472,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             )
             dateComponents.second = nil
 
+            let workoutDisplayName = String(localized: customWorkout.displayName)
             print("Scheduling workout for: \(scheduledDate)")
             print("Workout name: \(customWorkout.displayName)")
             print("Activity type: \(customWorkout.activity)")
@@ -463,7 +488,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 result([
                     "success": true,
                     "message": "Workout scheduled! It will appear in your Apple Watch Workout app within 5 minutes. Make sure your iPhone and Watch are paired and nearby.",
-                    "workoutName": customWorkout.displayName,
+                    "workoutName": workoutDisplayName,
                     "scheduledDate": ISO8601DateFormatter().string(from: scheduledDate),
                     "instructions": "Open the Workout app on your Apple Watch and scroll to the bottom to find your custom workout."
                 ])
@@ -536,8 +561,9 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             print("No existing recent workouts found, starting with empty array")
         }
 
+        let workoutDisplayName = String(localized: customWorkout.displayName)
         let workoutInfo: [String: Any] = [
-            "name": customWorkout.displayName,
+            "name": workoutDisplayName,
             "activityType": customWorkout.activity.rawValue,
             "scheduledTime": Date().timeIntervalSince1970
         ]
@@ -1195,6 +1221,8 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
             return
         }
 
+        let workoutDisplayName = String(localized: workout.displayName)
+
         let stackView = UIStackView()
         stackView.axis = .vertical
         stackView.spacing = 12
@@ -1202,7 +1230,7 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
         stackView.distribution = .equalSpacing
 
         let infoLabel = UILabel()
-        infoLabel.text = "📱 \(workout.displayName)"
+        infoLabel.text = "📱 \(workoutDisplayName)"
         infoLabel.font = UIFont.systemFont(ofSize: 14, weight: .medium)
         infoLabel.textColor = .label
         infoLabel.textAlignment = .center
@@ -1294,6 +1322,7 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
 
                 updateStatus("Scheduling workout...", color: .systemBlue)
 
+                let workoutDisplayName = String(localized: workout.displayName)
                 let scheduledDate = Date().addingTimeInterval(30)
                 let calendar = Calendar.current
                 var dateComponents = calendar.dateComponents(
@@ -1302,7 +1331,7 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
                 )
                 dateComponents.second = nil
 
-                print("Scheduling workout: \(workout.displayName)")
+                print("Scheduling workout: \(workoutDisplayName)")
                 print("Schedule time: \(scheduledDate)")
 
                 try await WorkoutScheduler.shared.schedule(workoutPlan, at: dateComponents)
@@ -1416,7 +1445,7 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
 private func createCustomWorkout(
     activity: HKWorkoutActivityType,
     location: HKWorkoutSessionLocationType,
-    displayName: String,
+    displayName: LocalizedStringResource,
     warmup: WorkoutStep? = nil,
     blocks: [IntervalBlock] = [],
     cooldown: WorkoutStep? = nil
