@@ -43,14 +43,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         let instance = FlutterWorkoutBridgePlugin()
         registrar.addMethodCallDelegate(instance, channel: channel)
 
-        // Register the workout preview view factory
-        if #available(iOS 17.0, *) {
-                if !previewFactoryRegistered {
-                let factory = WorkoutPreviewViewFactory(messenger: registrar.messenger())
-                registrar.register(factory, withId: "workout_preview_button")
-                previewFactoryRegistered = true
-                }
-        }
+    
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
