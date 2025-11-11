@@ -96,8 +96,11 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             return
         }
 
-        let readTypes: Set<HKObjectType> = [
-            HKObjectType.workoutType(),
+        let requiredReadTypes: [HKObjectType] = [
+            HKObjectType.workoutType()
+        ]
+
+        let optionalReadTypes: [HKObjectType] = [
             HKSeriesType.workoutRoute(),
             HKObjectType.quantityType(forIdentifier: .heartRate)!,
             HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
@@ -105,6 +108,8 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             HKObjectType.quantityType(forIdentifier: .distanceCycling)!,
             HKObjectType.quantityType(forIdentifier: .stepCount)!
         ]
+
+        let readTypes: Set<HKObjectType> = Set(requiredReadTypes + optionalReadTypes)
 
         let writeTypes: Set<HKSampleType> = [
             HKObjectType.workoutType()
@@ -117,17 +122,14 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                     return
                 }
 
-                let readTypesArray: [HKObjectType] = Array(readTypes)
-                let writeTypesArray: [HKSampleType] = Array(writeTypes)
-
-                let allReadAuthorized = readTypesArray.allSatisfy {
+                let requiredReadAuthorized = requiredReadTypes.allSatisfy {
                     self.healthStore.authorizationStatus(for: $0) == .sharingAuthorized
                 }
-                let allWriteAuthorized = writeTypesArray.allSatisfy {
+                let writeAuthorized = writeTypes.allSatisfy {
                     self.healthStore.authorizationStatus(for: $0) == .sharingAuthorized
                 }
 
-                result(allReadAuthorized && allWriteAuthorized)
+                result(requiredReadAuthorized && writeAuthorized)
             }
         }
     }
@@ -143,8 +145,11 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             return
         }
 
-        let readTypes: [HKObjectType] = [
-            HKObjectType.workoutType(),
+        let requiredReadTypes: [HKObjectType] = [
+            HKObjectType.workoutType()
+        ]
+
+        let optionalReadTypes: [HKObjectType] = [
             HKSeriesType.workoutRoute(),
             HKObjectType.quantityType(forIdentifier: .heartRate)!,
             HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
@@ -152,6 +157,8 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             HKObjectType.quantityType(forIdentifier: .distanceCycling)!,
             HKObjectType.quantityType(forIdentifier: .stepCount)!
         ]
+
+        let allReadTypes = requiredReadTypes + optionalReadTypes
 
         let writeTypes: [HKSampleType] = [
             HKObjectType.workoutType()
@@ -161,7 +168,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         var readPermissions: [String: String] = [:]
         var writePermissions: [String: String] = [:]
 
-        for type in readTypes {
+        for type in allReadTypes {
             let authStatus = healthStore.authorizationStatus(for: type)
             let statusString = authorizationStatusToString(authStatus)
             readPermissions[type.identifier] = statusString
@@ -173,33 +180,28 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             writePermissions[type.identifier] = statusString
         }
 
-        let allReadAuthorized = readTypes.allSatisfy {
+        let requiredReadAuthorized = requiredReadTypes.allSatisfy {
             healthStore.authorizationStatus(for: $0) == .sharingAuthorized
         }
-        let allWriteAuthorized = writeTypes.allSatisfy {
+        let optionalReadDenied = optionalReadTypes.contains {
+            healthStore.authorizationStatus(for: $0) == .sharingDenied
+        }
+        let writeAuthorized = writeTypes.allSatisfy {
             healthStore.authorizationStatus(for: $0) == .sharingAuthorized
         }
 
-        let anyReadDenied = readTypes.contains {
-            healthStore.authorizationStatus(for: $0) == .sharingDenied
-        }
-        let anyWriteDenied = writeTypes.contains {
-            healthStore.authorizationStatus(for: $0) == .sharingDenied
-        }
-
-        permissionResults["readPermission"] = allReadAuthorized
-        permissionResults["writePermission"] = allWriteAuthorized
-        permissionResults["readDenied"] = anyReadDenied
-        permissionResults["writeDenied"] = anyWriteDenied
+        permissionResults["readPermission"] = requiredReadAuthorized
+        permissionResults["writePermission"] = writeAuthorized
+        permissionResults["optionalReadDenied"] = optionalReadDenied
         permissionResults["readDetails"] = readPermissions
         permissionResults["writeDetails"] = writePermissions
 
-        if allReadAuthorized && allWriteAuthorized {
-            permissionResults["status"] = "All permissions granted"
-        } else if anyReadDenied || anyWriteDenied {
-            permissionResults["status"] = "Some permissions denied - Go to Settings > Privacy & Security > Health to enable"
+        if !requiredReadAuthorized || !writeAuthorized {
+            permissionResults["status"] = "Workout permission denied - enable Workout access in Health app"
+        } else if optionalReadDenied {
+            permissionResults["status"] = "Workout permission granted. Optional metrics denied in Health settings"
         } else {
-            permissionResults["status"] = "Permissions not determined - Call requestPermissions first"
+            permissionResults["status"] = "All permissions granted"
         }
 
         result(permissionResults)
