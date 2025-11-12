@@ -4,6 +4,7 @@ import WorkoutKit
 import HealthKit
 import Foundation
 import SwiftUI
+import AppIntents
 
 // MARK: - Supporting Types and Enums
 
@@ -24,11 +25,6 @@ enum WorkoutError: Error {
     }
 }
 
-@available(iOS 17.0, *)
-private func localized(_ raw: String) -> LocalizedStringResource {
-    LocalizedStringResource(stringLiteral: raw)
-}
-
 // MARK: - Main Plugin Class
 
 public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
@@ -36,14 +32,16 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
     private let healthStore = HKHealthStore()
     private var pendingResult: FlutterResult?
 
-    private static var previewFactoryRegistered = false
-
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "flutter_workout_bridge", binaryMessenger: registrar.messenger())
         let instance = FlutterWorkoutBridgePlugin()
         registrar.addMethodCallDelegate(instance, channel: channel)
 
-    
+        // Register the workout preview view factory
+        if #available(iOS 17.0, *) {
+            let factory = WorkoutPreviewViewFactory(messenger: registrar.messenger())
+            registrar.register(factory, withId: "workout_preview_button")
+        }
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -96,11 +94,8 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             return
         }
 
-        let requiredReadTypes: [HKObjectType] = [
-            HKObjectType.workoutType()
-        ]
-
-        let optionalReadTypes: [HKObjectType] = [
+        let readTypes: Set<HKObjectType> = [
+            HKObjectType.workoutType(),
             HKSeriesType.workoutRoute(),
             HKObjectType.quantityType(forIdentifier: .heartRate)!,
             HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
@@ -108,8 +103,6 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             HKObjectType.quantityType(forIdentifier: .distanceCycling)!,
             HKObjectType.quantityType(forIdentifier: .stepCount)!
         ]
-
-        let readTypes: Set<HKObjectType> = Set(requiredReadTypes + optionalReadTypes)
 
         let writeTypes: Set<HKSampleType> = [
             HKObjectType.workoutType()
@@ -122,14 +115,17 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                     return
                 }
 
-                let requiredReadAuthorized = requiredReadTypes.allSatisfy {
+                let readTypesArray: [HKObjectType] = Array(readTypes)
+                let writeTypesArray: [HKSampleType] = Array(writeTypes)
+
+                let allReadAuthorized = readTypesArray.allSatisfy {
                     self.healthStore.authorizationStatus(for: $0) == .sharingAuthorized
                 }
-                let writeAuthorized = writeTypes.allSatisfy {
+                let allWriteAuthorized = writeTypesArray.allSatisfy {
                     self.healthStore.authorizationStatus(for: $0) == .sharingAuthorized
                 }
 
-                result(requiredReadAuthorized && writeAuthorized)
+                result(allReadAuthorized && allWriteAuthorized)
             }
         }
     }
@@ -145,11 +141,8 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             return
         }
 
-        let requiredReadTypes: [HKObjectType] = [
-            HKObjectType.workoutType()
-        ]
-
-        let optionalReadTypes: [HKObjectType] = [
+        let readTypes: [HKObjectType] = [
+            HKObjectType.workoutType(),
             HKSeriesType.workoutRoute(),
             HKObjectType.quantityType(forIdentifier: .heartRate)!,
             HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
@@ -157,8 +150,6 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             HKObjectType.quantityType(forIdentifier: .distanceCycling)!,
             HKObjectType.quantityType(forIdentifier: .stepCount)!
         ]
-
-        let allReadTypes = requiredReadTypes + optionalReadTypes
 
         let writeTypes: [HKSampleType] = [
             HKObjectType.workoutType()
@@ -168,7 +159,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         var readPermissions: [String: String] = [:]
         var writePermissions: [String: String] = [:]
 
-        for type in allReadTypes {
+        for type in readTypes {
             let authStatus = healthStore.authorizationStatus(for: type)
             let statusString = authorizationStatusToString(authStatus)
             readPermissions[type.identifier] = statusString
@@ -180,28 +171,33 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             writePermissions[type.identifier] = statusString
         }
 
-        let requiredReadAuthorized = requiredReadTypes.allSatisfy {
+        let allReadAuthorized = readTypes.allSatisfy {
             healthStore.authorizationStatus(for: $0) == .sharingAuthorized
         }
-        let optionalReadDenied = optionalReadTypes.contains {
-            healthStore.authorizationStatus(for: $0) == .sharingDenied
-        }
-        let writeAuthorized = writeTypes.allSatisfy {
+        let allWriteAuthorized = writeTypes.allSatisfy {
             healthStore.authorizationStatus(for: $0) == .sharingAuthorized
         }
 
-        permissionResults["readPermission"] = requiredReadAuthorized
-        permissionResults["writePermission"] = writeAuthorized
-        permissionResults["optionalReadDenied"] = optionalReadDenied
+        let anyReadDenied = readTypes.contains {
+            healthStore.authorizationStatus(for: $0) == .sharingDenied
+        }
+        let anyWriteDenied = writeTypes.contains {
+            healthStore.authorizationStatus(for: $0) == .sharingDenied
+        }
+
+        permissionResults["readPermission"] = allReadAuthorized
+        permissionResults["writePermission"] = allWriteAuthorized
+        permissionResults["readDenied"] = anyReadDenied
+        permissionResults["writeDenied"] = anyWriteDenied
         permissionResults["readDetails"] = readPermissions
         permissionResults["writeDetails"] = writePermissions
 
-        if !requiredReadAuthorized || !writeAuthorized {
-            permissionResults["status"] = "Workout permission denied - enable Workout access in Health app"
-        } else if optionalReadDenied {
-            permissionResults["status"] = "Workout permission granted. Optional metrics denied in Health settings"
-        } else {
+        if allReadAuthorized && allWriteAuthorized {
             permissionResults["status"] = "All permissions granted"
+        } else if anyReadDenied || anyWriteDenied {
+            permissionResults["status"] = "Some permissions denied - Go to Settings > Privacy & Security > Health to enable"
+        } else {
+            permissionResults["status"] = "Permissions not determined - Call requestPermissions first"
         }
 
         result(permissionResults)
@@ -274,27 +270,25 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         return createCustomWorkout(
             activity: activityType,
             location: location,
-            displayName: localized(name),
+            displayName: name,
             warmup: warmupStep,
             blocks: intervalBlocks,
             cooldown: cooldownStep
         )
     }
 
-    }
-
     private func extractDisplayRepresentation(from stepData: [String: Any]) -> DisplayRepresentation? {
-    let possibleKeys = ["displayName", "title", "name", "detail"]
-    for key in possibleKeys {
-        if let value = stepData[key] as? String {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return DisplayRepresentation(title: localized(trimmed))
+        let possibleKeys = ["displayName", "title", "name", "detail"]
+        for key in possibleKeys {
+            if let value = stepData[key] as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return DisplayRepresentation(title: localized(trimmed))
+                }
             }
         }
+        return nil
     }
-    return nil
-}
 
     @available(iOS 17.0, *)
     private func parseWorkoutStep(stepData: [String: Any], stepType: WorkoutStepType) throws -> IntervalStep {
@@ -468,7 +462,6 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             )
             dateComponents.second = nil
 
-            let workoutDisplayName = String(localized: customWorkout.displayName)
             print("Scheduling workout for: \(scheduledDate)")
             print("Workout name: \(customWorkout.displayName)")
             print("Activity type: \(customWorkout.activity)")
@@ -484,7 +477,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 result([
                     "success": true,
                     "message": "Workout scheduled! It will appear in your Apple Watch Workout app within 5 minutes. Make sure your iPhone and Watch are paired and nearby.",
-                    "workoutName": workoutDisplayName,
+                    "workoutName": customWorkout.displayName,
                     "scheduledDate": ISO8601DateFormatter().string(from: scheduledDate),
                     "instructions": "Open the Workout app on your Apple Watch and scroll to the bottom to find your custom workout."
                 ])
@@ -557,9 +550,8 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             print("No existing recent workouts found, starting with empty array")
         }
 
-        let workoutDisplayName = String(localized: customWorkout.displayName)
         let workoutInfo: [String: Any] = [
-            "name": workoutDisplayName,
+            "name": customWorkout.displayName,
             "activityType": customWorkout.activity.rawValue,
             "scheduledTime": Date().timeIntervalSince1970
         ]
@@ -1217,8 +1209,6 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
             return
         }
 
-        let workoutDisplayName = String(localized: workout.displayName)
-
         let stackView = UIStackView()
         stackView.axis = .vertical
         stackView.spacing = 12
@@ -1226,7 +1216,7 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
         stackView.distribution = .equalSpacing
 
         let infoLabel = UILabel()
-        infoLabel.text = "📱 \(workoutDisplayName)"
+        infoLabel.text = "📱 \(workout.displayName)"
         infoLabel.font = UIFont.systemFont(ofSize: 14, weight: .medium)
         infoLabel.textColor = .label
         infoLabel.textAlignment = .center
@@ -1318,7 +1308,6 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
 
                 updateStatus("Scheduling workout...", color: .systemBlue)
 
-                let workoutDisplayName = String(localized: workout.displayName)
                 let scheduledDate = Date().addingTimeInterval(30)
                 let calendar = Calendar.current
                 var dateComponents = calendar.dateComponents(
@@ -1327,7 +1316,7 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
                 )
                 dateComponents.second = nil
 
-                print("Scheduling workout: \(workoutDisplayName)")
+                print("Scheduling workout: \(workout.displayName)")
                 print("Schedule time: \(scheduledDate)")
 
                 try await WorkoutScheduler.shared.schedule(workoutPlan, at: dateComponents)
@@ -1441,7 +1430,7 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
 private func createCustomWorkout(
     activity: HKWorkoutActivityType,
     location: HKWorkoutSessionLocationType,
-    displayName: LocalizedStringResource,
+    displayName: String,
     warmup: WorkoutStep? = nil,
     blocks: [IntervalBlock] = [],
     cooldown: WorkoutStep? = nil
