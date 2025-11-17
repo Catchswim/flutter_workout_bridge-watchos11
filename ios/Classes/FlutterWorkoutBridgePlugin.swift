@@ -216,15 +216,56 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         storeCustomWorkoutData(uuid: customUUID, name: name, json: json)
 
         var activityType: HKWorkoutActivityType = .swimming
-        var location = parseLocationType(json["location"] as? String ?? "outdoor")
+        let activityStringCandidates: [String?] = [
+            json["hkWorkoutActivityType"] as? String,
+            json["activityType"] as? String,
+            json["workoutActivityType"] as? String,
+            json["sport"] as? String
+        ]
+        if let rawActivity = activityStringCandidates
+            .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty }) {
+            activityType = parseActivityType(rawActivity)
+        }
 
-        if let swimLocationRaw = (json["swimmingLocationType"] as? String)?.lowercased() {
-            switch swimLocationRaw {
-            case "openwater":
-                location = .outdoor
-            default:
-                location = .indoor
-            }
+        let hkSwimLocationRaw = (json["hkWorkoutSwimmingLocationType"] as? String) ?? ""
+        let swimLocationRaw = (json["swimmingLocationType"] as? String) ?? ""
+        let locationHintRaw = (json["location"] as? String) ?? ""
+
+        let normalizedHKSwimLocation = hkSwimLocationRaw
+            .replacingOccurrences(of: "HKWorkoutSwimmingLocationType", with: "")
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+
+        let normalizedSwimLocation = swimLocationRaw
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+
+        let normalizedLocationHint = locationHintRaw
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+
+        let prefersOpenWater = [
+            normalizedHKSwimLocation == "openwater",
+            normalizedSwimLocation == "openwater",
+            normalizedLocationHint == "openwater",
+            normalizedLocationHint.contains("openwater"),
+            normalizedLocationHint.contains("open water")
+        ].contains(true)
+
+        let prefersPool = [
+            normalizedHKSwimLocation == "pool",
+            normalizedSwimLocation == "pool",
+            normalizedLocationHint == "pool",
+            normalizedLocationHint.contains("pool")
+        ].contains(true)
+
+        var location = parseLocationType(locationHintRaw.isEmpty ? "indoor" : locationHintRaw)
+        if prefersOpenWater && !prefersPool {
+            location = .outdoor
+        } else if prefersPool && !prefersOpenWater {
+            location = .indoor
         }
 
         print("[Bridge] Parsed workout -> activity: \(activityType.rawValue), location: \(location.rawValue)")
@@ -267,13 +308,13 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         )
     }
 
-    private func extractDisplayRepresentation(from stepData: [String: Any]) -> DisplayRepresentation? {
+    private func extractDisplayName(from stepData: [String: Any]) -> String? {
         let possibleKeys = ["displayName", "title", "name", "detail"]
         for key in possibleKeys {
             if let value = stepData[key] as? String {
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
-                    return DisplayRepresentation(title: localized(trimmed))
+                    return trimmed
                 }
             }
         }
@@ -283,101 +324,108 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
     @available(iOS 17.0, *)
     private func parseWorkoutStep(stepData: [String: Any], stepType: WorkoutStepType) throws -> IntervalStep {
         let purpose: IntervalStep.Purpose = stepType == .interval ? .work : .recovery
-
+        let goal: WorkoutGoal
         if let durationType = stepData["durationType"] as? String {
             switch durationType.lowercased() {
             case "time":
                 guard let seconds = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing time duration")
                 }
-                let goal = WorkoutGoal.time(seconds, .seconds)
-                var step = IntervalStep(purpose)
-                step.step.goal = goal
-                return step
-
+                goal = WorkoutGoal.time(seconds, .seconds)
             case "distance":
                 guard let meters = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing distance duration")
                 }
-                let goal = WorkoutGoal.distance(meters, .meters)
-                var step = IntervalStep(purpose)
-                step.step.goal = goal
-                return step
-
+                goal = WorkoutGoal.distance(meters, .meters)
             case "calories":
                 guard let calories = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing calorie target")
                 }
-                let goal = WorkoutGoal.energy(calories, .kilocalories)
-                var step = IntervalStep(purpose)
-                step.step.goal = goal
-                return step
-
+                goal = WorkoutGoal.energy(calories, .kilocalories)
             default:
-                let goal = WorkoutGoal.open
-                var step = IntervalStep(purpose)
-                step.step.goal = goal
-                return step
+                goal = WorkoutGoal.open
             }
         } else {
-            let goal = WorkoutGoal.open
-            var step = IntervalStep(purpose)
-            step.step.goal = goal
-            return step
+            goal = WorkoutGoal.open
         }
+
+        var step = IntervalStep(purpose)
+        let displayName = extractDisplayName(from: stepData)
+        if #available(iOS 18.0, *), let displayName {
+            step.step = WorkoutStep(goal: goal, displayName: displayName)
+        } else {
+            step.step.goal = goal
+        }
+        return step
     }
 
     @available(iOS 17.0, *)
     private func parseWorkoutStepAsWorkoutStep(stepData: [String: Any], stepType: WorkoutStepType) throws -> WorkoutStep {
+        let goal: WorkoutGoal
         if let durationType = stepData["durationType"] as? String {
             switch durationType.lowercased() {
             case "time":
                 guard let seconds = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing time duration")
                 }
-                let goal = WorkoutGoal.time(seconds, .seconds)
-                return WorkoutStep(goal: goal)
-
+                goal = WorkoutGoal.time(seconds, .seconds)
             case "distance":
                 guard let meters = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing distance duration")
                 }
-                let goal = WorkoutGoal.distance(meters, .meters)
-                return WorkoutStep(goal: goal)
-
+                goal = WorkoutGoal.distance(meters, .meters)
             case "calories":
                 guard let calories = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing calorie target")
                 }
-                let goal = WorkoutGoal.energy(calories, .kilocalories)
-                return WorkoutStep(goal: goal)
-
+                goal = WorkoutGoal.energy(calories, .kilocalories)
             default:
-                return WorkoutStep(goal: .open)
+                goal = .open
             }
         } else {
-            return WorkoutStep(goal: .open)
+            goal = .open
         }
+
+        let displayName = extractDisplayName(from: stepData)
+        if #available(iOS 18.0, *), let displayName {
+            return WorkoutStep(goal: goal, displayName: displayName)
+        }
+        return WorkoutStep(goal: goal)
     }
 
     private func parseActivityType(_ activityString: String) -> HKWorkoutActivityType {
-        switch activityString.lowercased() {
-        case "running":     return .running
-        case "cycling":     return .cycling
-        case "walking":     return .walking
-        case "swimming":    return .swimming
-        case "hiking":      return .hiking
-        case "yoga":        return .yoga
-        case "strength":    return .functionalStrengthTraining
-        case "rowing":      return .rowing
-        case "elliptical":  return .elliptical
-        case "skiing":              return .downhillSkiing
-        case "downhill_skiing":     return .downhillSkiing
-        case "cross_country_skiing", "xc_skiing":
-                                    return .crossCountrySkiing
-        case "surfing":             return .surfingSports
+        let trimmed = activityString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = trimmed
+            .replacingOccurrences(of: "HKWorkoutActivityType", with: "")
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        let normalized = cleaned
+            .replacingOccurrences(of: " ", with: "")
+            .lowercased()
+
+        switch normalized {
+        case "running":                 return .running
+        case "cycling":                 return .cycling
+        case "walking":                 return .walking
+        case "swimming":                return .swimming
+        case "poolswimming":            return .swimming
+        case "openwater", "openwaterswimming":
+                                          return .swimming
+        case "hiking":                  return .hiking
+        case "yoga":                    return .yoga
+        case "strength", "functionalstrengthtraining":
+                                          return .functionalStrengthTraining
+        case "rowing":                  return .rowing
+        case "elliptical":              return .elliptical
+        case "skiing", "downhillskiing":
+                                          return .downhillSkiing
+        case "crosscountryskiing", "xccskiing", "xcskiing":
+                                          return .crossCountrySkiing
+        case "surfing", "surfingsports":
+                                          return .surfingSports
         default:
-            return .running
+            return .swimming
         }
     }
 
