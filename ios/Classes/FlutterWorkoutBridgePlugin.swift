@@ -6,6 +6,25 @@ import Foundation
 import SwiftUI
 import AppIntents
 
+private let iso8601FormatterWithFractional: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
+
+private let iso8601FormatterBasic: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+}()
+
+private let dateOnlyFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd"
+    formatter.timeZone = TimeZone.current
+    return formatter
+}()
+
 // MARK: - Supporting Types and Enums
 
 enum WorkoutStepType: String {
@@ -215,58 +234,25 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         let customUUID = json["uuid"] as? String ?? UUID().uuidString
         storeCustomWorkoutData(uuid: customUUID, name: name, json: json)
 
-        var activityType: HKWorkoutActivityType = .swimming
-        let activityStringCandidates: [String?] = [
-            json["hkWorkoutActivityType"] as? String,
-            json["activityType"] as? String,
-            json["workoutActivityType"] as? String,
-            json["sport"] as? String
-        ]
-        if let rawActivity = activityStringCandidates
-            .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
-            .first(where: { !$0.isEmpty }) {
-            activityType = parseActivityType(rawActivity)
-        }
-
         let hkSwimLocationRaw = (json["hkWorkoutSwimmingLocationType"] as? String) ?? ""
         let swimLocationRaw = (json["swimmingLocationType"] as? String) ?? ""
-        let locationHintRaw = (json["location"] as? String) ?? ""
 
-        let normalizedHKSwimLocation = hkSwimLocationRaw
-            .replacingOccurrences(of: "HKWorkoutSwimmingLocationType", with: "")
-            .replacingOccurrences(of: ".", with: "")
-            .replacingOccurrences(of: "-", with: "")
-            .lowercased()
+        let isOpenWater = {
+            let hkLower = hkSwimLocationRaw.lowercased()
+            if hkLower.contains("openwater") || hkLower.contains("open_water") {
+                return true
+            }
+            let lower = swimLocationRaw.lowercased()
+            if lower.contains("openwater") || lower.contains("open_water") {
+                return true
+            }
+            return false
+        }()
 
-        let normalizedSwimLocation = swimLocationRaw
-            .replacingOccurrences(of: "-", with: "")
-            .lowercased()
+        let activityType: HKWorkoutActivityType = .swimming
+        let location: HKWorkoutSessionLocationType = isOpenWater ? .outdoor : .indoor
 
-        let normalizedLocationHint = locationHintRaw
-            .replacingOccurrences(of: "-", with: "")
-            .lowercased()
-
-        let prefersOpenWater = [
-            normalizedHKSwimLocation == "openwater",
-            normalizedSwimLocation == "openwater",
-            normalizedLocationHint == "openwater",
-            normalizedLocationHint.contains("openwater"),
-            normalizedLocationHint.contains("open water")
-        ].contains(true)
-
-        let prefersPool = [
-            normalizedHKSwimLocation == "pool",
-            normalizedSwimLocation == "pool",
-            normalizedLocationHint == "pool",
-            normalizedLocationHint.contains("pool")
-        ].contains(true)
-
-        var location = parseLocationType(locationHintRaw.isEmpty ? "indoor" : locationHintRaw)
-        if prefersOpenWater && !prefersPool {
-            location = .outdoor
-        } else if prefersPool && !prefersOpenWater {
-            location = .indoor
-        }
+        print("[Bridge] swimLocationType=\(swimLocationRaw) hkSwimLocationType=\(hkSwimLocationRaw) isOpenWater=\(isOpenWater)")
 
         print("[Bridge] Parsed workout -> activity: \(activityType.rawValue), location: \(location.rawValue)")
 
@@ -308,13 +294,13 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         )
     }
 
-    private func extractDisplayName(from stepData: [String: Any]) -> String? {
+    private func extractDisplayRepresentation(from stepData: [String: Any]) -> DisplayRepresentation? {
         let possibleKeys = ["displayName", "title", "name", "detail"]
         for key in possibleKeys {
             if let value = stepData[key] as? String {
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
-                    return trimmed
+                    return DisplayRepresentation(title: localized(trimmed))
                 }
             }
         }
@@ -322,123 +308,122 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
     }
 
     @available(iOS 17.0, *)
+    private func purposeFromStepData(_ stepData: [String: Any], defaultType: WorkoutStepType) -> IntervalStep.Purpose {
+        if let purposeString = (stepData["purpose"] as? String)?.lowercased() {
+            switch purposeString {
+            case "recovery":
+                return .recovery
+            case "work":
+                return .work
+            default:
+                break
+            }
+        }
+        return defaultType == .interval ? .work : .recovery
+    }
+
+    @available(iOS 17.0, *)
     private func parseWorkoutStep(stepData: [String: Any], stepType: WorkoutStepType) throws -> IntervalStep {
-        let purpose: IntervalStep.Purpose = stepType == .interval ? .work : .recovery
-        let goal: WorkoutGoal
+        let purpose = purposeFromStepData(stepData, defaultType: stepType)
+
         if let durationType = stepData["durationType"] as? String {
             switch durationType.lowercased() {
             case "time":
                 guard let seconds = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing time duration")
                 }
-                goal = WorkoutGoal.time(seconds, .seconds)
+                let goal = WorkoutGoal.time(seconds, .seconds)
+                var step = IntervalStep(purpose)
+                step.step.goal = goal
+                return step
+
             case "distance":
                 guard let meters = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing distance duration")
                 }
-                goal = WorkoutGoal.distance(meters, .meters)
+                let goal = WorkoutGoal.distance(meters, .meters)
+                var step = IntervalStep(purpose)
+                step.step.goal = goal
+                return step
+
             case "calories":
                 guard let calories = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing calorie target")
                 }
-                goal = WorkoutGoal.energy(calories, .kilocalories)
+                let goal = WorkoutGoal.energy(calories, .kilocalories)
+                var step = IntervalStep(purpose)
+                step.step.goal = goal
+                return step
+
             default:
-                goal = WorkoutGoal.open
+                let goal = WorkoutGoal.open
+                var step = IntervalStep(purpose)
+                step.step.goal = goal
+                return step
             }
         } else {
-            goal = WorkoutGoal.open
-        }
-
-        var step = IntervalStep(purpose)
-        let displayName = extractDisplayName(from: stepData)
-        if #available(iOS 18.0, *), let displayName {
-            step.step = WorkoutStep(goal: goal, displayName: displayName)
-        } else {
+            let goal = WorkoutGoal.open
+            var step = IntervalStep(purpose)
             step.step.goal = goal
+            return step
         }
-        return step
     }
 
     @available(iOS 17.0, *)
     private func parseWorkoutStepAsWorkoutStep(stepData: [String: Any], stepType: WorkoutStepType) throws -> WorkoutStep {
-        let goal: WorkoutGoal
         if let durationType = stepData["durationType"] as? String {
             switch durationType.lowercased() {
             case "time":
                 guard let seconds = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing time duration")
                 }
-                goal = WorkoutGoal.time(seconds, .seconds)
+                let goal = WorkoutGoal.time(seconds, .seconds)
+                return WorkoutStep(goal: goal)
+
             case "distance":
                 guard let meters = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing distance duration")
                 }
-                goal = WorkoutGoal.distance(meters, .meters)
+                let goal = WorkoutGoal.distance(meters, .meters)
+                return WorkoutStep(goal: goal)
+
             case "calories":
                 guard let calories = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing calorie target")
                 }
-                goal = WorkoutGoal.energy(calories, .kilocalories)
+                let goal = WorkoutGoal.energy(calories, .kilocalories)
+                return WorkoutStep(goal: goal)
+
             default:
-                goal = .open
+                return WorkoutStep(goal: .open)
             }
         } else {
-            goal = .open
+            return WorkoutStep(goal: .open)
         }
-
-        let displayName = extractDisplayName(from: stepData)
-        if #available(iOS 18.0, *), let displayName {
-            return WorkoutStep(goal: goal, displayName: displayName)
-        }
-        return WorkoutStep(goal: goal)
     }
 
     private func parseActivityType(_ activityString: String) -> HKWorkoutActivityType {
-        let trimmed = activityString.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleaned = trimmed
-            .replacingOccurrences(of: "HKWorkoutActivityType", with: "")
-            .replacingOccurrences(of: ".", with: "")
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: "_", with: "")
-        let normalized = cleaned
-            .replacingOccurrences(of: " ", with: "")
-            .lowercased()
-
-        switch normalized {
-        case "running":                 return .running
-        case "cycling":                 return .cycling
-        case "walking":                 return .walking
-        case "swimming":                return .swimming
-        case "poolswimming":            return .swimming
-        case "openwater", "openwaterswimming":
-                                          return .swimming
-        case "hiking":                  return .hiking
-        case "yoga":                    return .yoga
-        case "strength", "functionalstrengthtraining":
-                                          return .functionalStrengthTraining
-        case "rowing":                  return .rowing
-        case "elliptical":              return .elliptical
-        case "skiing", "downhillskiing":
-                                          return .downhillSkiing
-        case "crosscountryskiing", "xccskiing", "xcskiing":
-                                          return .crossCountrySkiing
-        case "surfing", "surfingsports":
-                                          return .surfingSports
+        switch activityString.lowercased() {
+        case "running":     return .running
+        case "cycling":     return .cycling
+        case "walking":     return .walking
+        case "swimming":    return .swimming
+        case "hiking":      return .hiking
+        case "yoga":        return .yoga
+        case "strength":    return .functionalStrengthTraining
+        case "rowing":      return .rowing
+        case "elliptical":  return .elliptical
+        case "skiing":              return .downhillSkiing
+        case "downhill_skiing":     return .downhillSkiing
+        case "cross_country_skiing", "xc_skiing":
+                                    return .crossCountrySkiing
+        case "surfing":             return .surfingSports
         default:
-            return .swimming
+            return .running
         }
     }
 
-    private func parseLocationType(_ locationString: String) -> HKWorkoutSessionLocationType {
-        switch locationString.lowercased() {
-        case "indoor":
-            return .indoor
-        case "outdoor":
-            return .outdoor
-        default:
-            return .outdoor
-        }
-    }
+    // Removed parseLocationType helper; location is derived from swimming metadata above.
 
     // MARK: - Workout Presentation
 
@@ -455,10 +440,25 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         do {
             let customWorkout = try parseJsonToWorkout(json: json)
             WorkoutStore.shared.setWorkout(customWorkout)
-            storeRecentWorkoutInfo(customWorkout: customWorkout)
+            let resolvedSchedule = resolveScheduleDate(from: json)
+            var scheduleDebug = json["scheduleDebug"] as? [String: Any] ?? [:]
+            if let resolved = resolvedSchedule {
+                scheduleDebug["resolvedSource"] = resolved.source
+                scheduleDebug["resolvedIso"] = iso8601FormatterWithFractional.string(from: resolved.date)
+            }
+            if let timezone = json["scheduledTimezone"] as? String,
+               !timezone.isEmpty {
+                scheduleDebug["timezone"] = timezone
+            }
 
             Task {
-                await scheduleWorkoutToAppleWatch(customWorkout: customWorkout, result: result)
+                await scheduleWorkoutToAppleWatch(
+                    customWorkout: customWorkout,
+                    requestedDate: resolvedSchedule?.date,
+                    scheduleDebug: scheduleDebug.isEmpty ? nil : scheduleDebug,
+                    json: json,
+                    result: result
+                )
             }
         } catch {
             result(FlutterError(code: "WORKOUT_CREATION_ERROR",
@@ -468,7 +468,13 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
     }
 
     @available(iOS 17.0, *)
-    private func scheduleWorkoutToAppleWatch(customWorkout: CustomWorkout, result: @escaping FlutterResult) async {
+    private func scheduleWorkoutToAppleWatch(
+        customWorkout: CustomWorkout,
+        requestedDate: Date?,
+        scheduleDebug: [String: Any]?,
+        json: [String: Any],
+        result: @escaping FlutterResult
+    ) async {
         do {
             let workoutPlan = WorkoutPlan(.custom(customWorkout))
 
@@ -492,7 +498,20 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 }
             }
 
-            let scheduledDate = Date().addingTimeInterval(300) // 5 minutes in future
+            let now = Date()
+            var scheduledDate: Date
+            if let requestedDate {
+                if requestedDate < now.addingTimeInterval(-1800) {
+                    print("Requested schedule date \(requestedDate) is in the past. Adjusting to near future.")
+                    scheduledDate = now.addingTimeInterval(300)
+                } else {
+                    scheduledDate = requestedDate
+                }
+            } else {
+                print("No requested schedule date provided. Defaulting to 5 minutes from now.")
+                scheduledDate = now.addingTimeInterval(300)
+            }
+
             let calendar = Calendar.current
             var dateComponents = calendar.dateComponents(
                 [.year, .month, .day, .hour, .minute],
@@ -503,6 +522,12 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             print("Scheduling workout for: \(scheduledDate)")
             print("Workout name: \(customWorkout.displayName)")
             print("Activity type: \(customWorkout.activity)")
+            if let scheduleDebug {
+                print("Schedule debug info: \(scheduleDebug)")
+            }
+            if let timezone = json["scheduledTimezone"] as? String {
+                print("Requested timezone: \(timezone)")
+            }
 
             try await WorkoutScheduler.shared.schedule(workoutPlan, at: dateComponents)
 
@@ -514,12 +539,18 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             let scheduledWorkouts = try? await WorkoutScheduler.shared.scheduledWorkouts
             print("Number of scheduled workouts: \(scheduledWorkouts?.count ?? 0)")
 
+            storeRecentWorkoutInfo(
+                customWorkout: customWorkout,
+                scheduledDate: scheduledDate,
+                metadata: scheduleDebug
+            )
+
             DispatchQueue.main.async {
                 result([
                     "success": true,
-                    "message": "Workout scheduled! It will appear in your Apple Watch Workout app within 5 minutes. Make sure your iPhone and Watch are paired and nearby.",
+                    "message": "Workout scheduled! It will appear in your Apple Watch Workout app at the planned time. Make sure your iPhone and Watch are paired and nearby.",
                     "workoutName": customWorkout.displayName,
-                    "scheduledDate": ISO8601DateFormatter().string(from: scheduledDate),
+                    "scheduledDate": iso8601FormatterWithFractional.string(from: scheduledDate),
                     "instructions": "Open the Workout app on your Apple Watch and scroll to the bottom to find your custom workout."
                 ])
             }
@@ -581,7 +612,11 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
     }
 
     @available(iOS 17.0, *)
-    private func storeRecentWorkoutInfo(customWorkout: CustomWorkout) {
+    private func storeRecentWorkoutInfo(
+        customWorkout: CustomWorkout,
+        scheduledDate: Date?,
+        metadata: [String: Any]? = nil
+    ) {
         let defaults = UserDefaults.standard
 
         var recentWorkouts: [[String: Any]] = []
@@ -591,11 +626,20 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             print("No existing recent workouts found, starting with empty array")
         }
 
-        let workoutInfo: [String: Any] = [
+        var workoutInfo: [String: Any] = [
             "name": customWorkout.displayName,
             "activityType": customWorkout.activity.rawValue,
-            "scheduledTime": Date().timeIntervalSince1970
+            "scheduledTime": (scheduledDate ?? Date()).timeIntervalSince1970
         ]
+
+        if let scheduledDate {
+            workoutInfo["scheduledIso"] = iso8601FormatterWithFractional.string(from: scheduledDate)
+        }
+
+        if let metadata,
+           !metadata.isEmpty {
+            workoutInfo["scheduleDebug"] = metadata
+        }
 
         recentWorkouts.append(workoutInfo)
 
@@ -606,7 +650,31 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         defaults.set(recentWorkouts, forKey: "RecentCustomWorkouts")
         defaults.synchronize()
 
-        print("Stored recent workout info: \(customWorkout.displayName)")
+        print("Stored recent workout \(customWorkout.displayName), total recent: \(recentWorkouts.count)")
+    }
+
+    @available(iOS 17.0, *)
+    private func resolveScheduleDate(from json: [String: Any]) -> (date: Date, source: String)? {
+        if let isoString = json["scheduledDateIso"] as? String,
+           !isoString.isEmpty {
+            if let parsed = iso8601FormatterWithFractional.date(from: isoString) ?? iso8601FormatterBasic.date(from: isoString) {
+                return (parsed, "scheduledDateIso")
+            }
+        }
+        if let epochMillis = json["scheduledEpochMillis"] as? NSNumber {
+            let date = Date(timeIntervalSince1970: epochMillis.doubleValue / 1000.0)
+            return (date, "scheduledEpochMillis")
+        }
+        if let epochSeconds = json["scheduledEpochSeconds"] as? NSNumber {
+            let date = Date(timeIntervalSince1970: epochSeconds.doubleValue)
+            return (date, "scheduledEpochSeconds")
+        }
+        if let dateOnly = json["scheduledDate"] as? String,
+           !dateOnly.isEmpty,
+           let parsed = dateOnlyFormatter.date(from: dateOnly) {
+            return (parsed, "scheduledDate")
+        }
+        return nil
     }
 
     private func findCustomWorkoutName(for workout: HKWorkout) -> String? {
