@@ -334,6 +334,9 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 }
                 let goal = WorkoutGoal.time(seconds, .seconds)
                 var step = IntervalStep(purpose)
+                if let display = extractDisplayRepresentation(from: stepData) {
+                    step.step.displayRepresentation = display
+                }
                 step.step.goal = goal
                 return step
 
@@ -343,6 +346,9 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 }
                 let goal = WorkoutGoal.distance(meters, .meters)
                 var step = IntervalStep(purpose)
+                if let display = extractDisplayRepresentation(from: stepData) {
+                    step.step.displayRepresentation = display
+                }
                 step.step.goal = goal
                 return step
 
@@ -352,18 +358,27 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 }
                 let goal = WorkoutGoal.energy(calories, .kilocalories)
                 var step = IntervalStep(purpose)
+                if let display = extractDisplayRepresentation(from: stepData) {
+                    step.step.displayRepresentation = display
+                }
                 step.step.goal = goal
                 return step
 
             default:
                 let goal = WorkoutGoal.open
                 var step = IntervalStep(purpose)
+                if let display = extractDisplayRepresentation(from: stepData) {
+                    step.step.displayRepresentation = display
+                }
                 step.step.goal = goal
                 return step
             }
         } else {
             let goal = WorkoutGoal.open
             var step = IntervalStep(purpose)
+            if let display = extractDisplayRepresentation(from: stepData) {
+                step.step.displayRepresentation = display
+            }
             step.step.goal = goal
             return step
         }
@@ -378,27 +393,47 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                     throw WorkoutError.invalidWorkoutData("Missing time duration")
                 }
                 let goal = WorkoutGoal.time(seconds, .seconds)
-                return WorkoutStep(goal: goal)
+                var step = WorkoutStep(goal: goal)
+                if let display = extractDisplayRepresentation(from: stepData) {
+                    step.displayRepresentation = display
+                }
+                return step
 
             case "distance":
                 guard let meters = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing distance duration")
                 }
                 let goal = WorkoutGoal.distance(meters, .meters)
-                return WorkoutStep(goal: goal)
+                var step = WorkoutStep(goal: goal)
+                if let display = extractDisplayRepresentation(from: stepData) {
+                    step.displayRepresentation = display
+                }
+                return step
 
             case "calories":
                 guard let calories = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing calorie target")
                 }
                 let goal = WorkoutGoal.energy(calories, .kilocalories)
-                return WorkoutStep(goal: goal)
+                var step = WorkoutStep(goal: goal)
+                if let display = extractDisplayRepresentation(from: stepData) {
+                    step.displayRepresentation = display
+                }
+                return step
 
             default:
-                return WorkoutStep(goal: .open)
+                var step = WorkoutStep(goal: .open)
+                if let display = extractDisplayRepresentation(from: stepData) {
+                    step.displayRepresentation = display
+                }
+                return step
             }
         } else {
-            return WorkoutStep(goal: .open)
+            var step = WorkoutStep(goal: .open)
+            if let display = extractDisplayRepresentation(from: stepData) {
+                step.displayRepresentation = display
+            }
+            return step
         }
     }
 
