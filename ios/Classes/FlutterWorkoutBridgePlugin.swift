@@ -44,7 +44,7 @@ enum WorkoutError: Error {
     }
 }
 
-@available(iOS 18.0, *)
+@available(iOS 17.0, *)
 private func localized(_ raw: String) -> LocalizedStringResource {
     LocalizedStringResource(stringLiteral: raw)
 }
@@ -62,7 +62,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         registrar.addMethodCallDelegate(instance, channel: channel)
 
         // Register the workout preview view factory
-        if #available(iOS 18.0, *) {
+        if #available(iOS 17.0, *) {
             let factory = WorkoutPreviewViewFactory(messenger: registrar.messenger())
             registrar.register(factory, withId: "workout_preview_button")
         }
@@ -70,8 +70,8 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         // Check iOS version first
-        guard #available(iOS 18.0, *) else {
-            result(FlutterError(code: "IOS_VERSION_NOT_SUPPORTED", message: "This plugin requires iOS 18.0 or later", details: nil))
+        guard #available(iOS 17.0, *) else {
+            result(FlutterError(code: "IOS_VERSION_NOT_SUPPORTED", message: "This plugin requires iOS 17.0 or later", details: nil))
             return
         }
 
@@ -145,7 +145,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         }
     }
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func checkHealthKitPermissions(result: @escaping FlutterResult) {
         checkActualHealthKitPermissions(result: result)
     }
@@ -214,7 +214,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
     // MARK: - Workout Creation
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func createWorkoutFromJson(json: [String: Any], result: @escaping FlutterResult) {
         do {
             let customWorkout = try parseJsonToWorkout(json: json)
@@ -224,7 +224,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         }
     }
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func parseJsonToWorkout(json: [String: Any]) throws -> CustomWorkout {
         print("[Bridge] Incoming workout JSON: \(json)")
         guard let name = json["name"] as? String else {
@@ -294,20 +294,20 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         )
     }
 
-    private func extractDisplayRepresentation(from stepData: [String: Any]) -> DisplayRepresentation? {
+    private func extractDisplayName(from stepData: [String: Any]) -> String? {
         let possibleKeys = ["displayName", "title", "name", "detail"]
         for key in possibleKeys {
             if let value = stepData[key] as? String {
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
-                    return DisplayRepresentation(title: localized(trimmed))
+                    return trimmed
                 }
             }
         }
         return nil
     }
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func purposeFromStepData(_ stepData: [String: Any], defaultType: WorkoutStepType) -> IntervalStep.Purpose {
         if let purposeString = (stepData["purpose"] as? String)?.lowercased() {
             switch purposeString {
@@ -322,7 +322,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         return defaultType == .interval ? .work : .recovery
     }
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func parseWorkoutStep(stepData: [String: Any], stepType: WorkoutStepType) throws -> IntervalStep {
         let purpose = purposeFromStepData(stepData, defaultType: stepType)
 
@@ -334,10 +334,12 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 }
                 let goal = WorkoutGoal.time(seconds, .seconds)
                 var step = IntervalStep(purpose)
-                if let display = extractDisplayRepresentation(from: stepData) {
-                    step.step.displayRepresentation = display
+                let displayName = extractDisplayName(from: stepData)
+                if #available(iOS 18.0, *), let displayName {
+                    step.step = WorkoutStep(goal: goal, displayName: displayName)
+                } else {
+                    step.step.goal = goal
                 }
-                step.step.goal = goal
                 return step
 
             case "distance":
@@ -346,10 +348,12 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 }
                 let goal = WorkoutGoal.distance(meters, .meters)
                 var step = IntervalStep(purpose)
-                if let display = extractDisplayRepresentation(from: stepData) {
-                    step.step.displayRepresentation = display
+                let displayName = extractDisplayName(from: stepData)
+                if #available(iOS 18.0, *), let displayName {
+                    step.step = WorkoutStep(goal: goal, displayName: displayName)
+                } else {
+                    step.step.goal = goal
                 }
-                step.step.goal = goal
                 return step
 
             case "calories":
@@ -358,33 +362,39 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 }
                 let goal = WorkoutGoal.energy(calories, .kilocalories)
                 var step = IntervalStep(purpose)
-                if let display = extractDisplayRepresentation(from: stepData) {
-                    step.step.displayRepresentation = display
+                let displayName = extractDisplayName(from: stepData)
+                if #available(iOS 18.0, *), let displayName {
+                    step.step = WorkoutStep(goal: goal, displayName: displayName)
+                } else {
+                    step.step.goal = goal
                 }
-                step.step.goal = goal
                 return step
 
             default:
                 let goal = WorkoutGoal.open
                 var step = IntervalStep(purpose)
-                if let display = extractDisplayRepresentation(from: stepData) {
-                    step.step.displayRepresentation = display
+                let displayName = extractDisplayName(from: stepData)
+                if #available(iOS 18.0, *), let displayName {
+                    step.step = WorkoutStep(goal: goal, displayName: displayName)
+                } else {
+                    step.step.goal = goal
                 }
-                step.step.goal = goal
                 return step
             }
         } else {
             let goal = WorkoutGoal.open
             var step = IntervalStep(purpose)
-            if let display = extractDisplayRepresentation(from: stepData) {
-                step.step.displayRepresentation = display
+            let displayName = extractDisplayName(from: stepData)
+            if #available(iOS 18.0, *), let displayName {
+                step.step = WorkoutStep(goal: goal, displayName: displayName)
+            } else {
+                step.step.goal = goal
             }
-            step.step.goal = goal
             return step
         }
     }
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func parseWorkoutStepAsWorkoutStep(stepData: [String: Any], stepType: WorkoutStepType) throws -> WorkoutStep {
         if let durationType = stepData["durationType"] as? String {
             switch durationType.lowercased() {
@@ -393,47 +403,47 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                     throw WorkoutError.invalidWorkoutData("Missing time duration")
                 }
                 let goal = WorkoutGoal.time(seconds, .seconds)
-                var step = WorkoutStep(goal: goal)
-                if let display = extractDisplayRepresentation(from: stepData) {
-                    step.displayRepresentation = display
+                let displayName = extractDisplayName(from: stepData)
+                if #available(iOS 18.0, *), let displayName {
+                    return WorkoutStep(goal: goal, displayName: displayName)
                 }
-                return step
+                return WorkoutStep(goal: goal)
 
             case "distance":
                 guard let meters = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing distance duration")
                 }
                 let goal = WorkoutGoal.distance(meters, .meters)
-                var step = WorkoutStep(goal: goal)
-                if let display = extractDisplayRepresentation(from: stepData) {
-                    step.displayRepresentation = display
+                let displayName = extractDisplayName(from: stepData)
+                if #available(iOS 18.0, *), let displayName {
+                    return WorkoutStep(goal: goal, displayName: displayName)
                 }
-                return step
+                return WorkoutStep(goal: goal)
 
             case "calories":
                 guard let calories = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing calorie target")
                 }
                 let goal = WorkoutGoal.energy(calories, .kilocalories)
-                var step = WorkoutStep(goal: goal)
-                if let display = extractDisplayRepresentation(from: stepData) {
-                    step.displayRepresentation = display
+                let displayName = extractDisplayName(from: stepData)
+                if #available(iOS 18.0, *), let displayName {
+                    return WorkoutStep(goal: goal, displayName: displayName)
                 }
-                return step
+                return WorkoutStep(goal: goal)
 
             default:
-                var step = WorkoutStep(goal: .open)
-                if let display = extractDisplayRepresentation(from: stepData) {
-                    step.displayRepresentation = display
+                let displayName = extractDisplayName(from: stepData)
+                if #available(iOS 18.0, *), let displayName {
+                    return WorkoutStep(goal: .open, displayName: displayName)
                 }
-                return step
+                return WorkoutStep(goal: .open)
             }
         } else {
-            var step = WorkoutStep(goal: .open)
-            if let display = extractDisplayRepresentation(from: stepData) {
-                step.displayRepresentation = display
+            let displayName = extractDisplayName(from: stepData)
+            if #available(iOS 18.0, *), let displayName {
+                return WorkoutStep(goal: .open, displayName: displayName)
             }
-            return step
+            return WorkoutStep(goal: .open)
         }
     }
 
@@ -462,13 +472,13 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
     // MARK: - Workout Presentation
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func presentWorkout(customWorkout: CustomWorkout, result: @escaping FlutterResult) {
         WorkoutStore.shared.setWorkout(customWorkout)
         result(true)
     }
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func presentWorkoutDirectly(json: [String: Any], result: @escaping FlutterResult) {
         cleanupUserDefaults()
 
@@ -502,7 +512,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         }
     }
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func scheduleWorkoutToAppleWatch(
         customWorkout: CustomWorkout,
         requestedDate: Date?,
@@ -646,7 +656,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         return customWorkouts[uuid]
     }
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func storeRecentWorkoutInfo(
         customWorkout: CustomWorkout,
         scheduledDate: Date?,
@@ -688,7 +698,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         print("Stored recent workout \(customWorkout.displayName), total recent: \(recentWorkouts.count)")
     }
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func resolveScheduleDate(from json: [String: Any]) -> (date: Date, source: String)? {
         if let isoString = json["scheduledDateIso"] as? String,
            !isoString.isEmpty {
@@ -741,7 +751,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
     // MARK: - HealthKit Data Retrieval
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func getScheduledWorkouts(result: @escaping FlutterResult) {
         Task {
             do {
@@ -765,7 +775,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         }
     }
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
     private func clearAllScheduledWorkouts(result: @escaping FlutterResult) {
         Task {
             do {
@@ -1279,7 +1289,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
 // MARK: - Workout Store
 
-    @available(iOS 18.0, *)
+    @available(iOS 17.0, *)
 class WorkoutStore: ObservableObject {
     static let shared = WorkoutStore()
     @Published var currentWorkout: CustomWorkout?
@@ -1293,7 +1303,7 @@ class WorkoutStore: ObservableObject {
 
 // MARK: - WorkoutPreviewView Factory
 
-@available(iOS 18.0, *)
+    @available(iOS 17.0, *)
 class WorkoutPreviewViewFactory: NSObject, FlutterPlatformViewFactory {
     private var messenger: FlutterBinaryMessenger
 
@@ -1322,7 +1332,7 @@ class WorkoutPreviewViewFactory: NSObject, FlutterPlatformViewFactory {
 
 // MARK: - WorkoutPreviewFlutterView
 
-@available(iOS 18.0, *)
+    @available(iOS 17.0, *)
 class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
     private var _view: UIView
     private var statusLabel: UILabel?
@@ -1573,7 +1583,7 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
 
 // MARK: - Helper Functions
 
-@available(iOS 18.0, *)
+@available(iOS 17.0, *)
 private func createCustomWorkout(
     activity: HKWorkoutActivityType,
     location: HKWorkoutSessionLocationType,
@@ -1592,7 +1602,7 @@ private func createCustomWorkout(
     )
 }
 
-@available(iOS 18.0, *)
+@available(iOS 17.0, *)
 private func describeWorkoutStep(_ step: WorkoutStep?) -> String {
     guard let step = step else { return "None" }
 
