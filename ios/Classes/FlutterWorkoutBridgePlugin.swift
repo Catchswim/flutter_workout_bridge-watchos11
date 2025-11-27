@@ -234,25 +234,22 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         let customUUID = json["uuid"] as? String ?? UUID().uuidString
         storeCustomWorkoutData(uuid: customUUID, name: name, json: json)
 
-        let hkSwimLocationRaw = (json["hkWorkoutSwimmingLocationType"] as? String) ?? ""
-        let swimLocationRaw = (json["swimmingLocationType"] as? String) ?? ""
-
-        let isOpenWater = {
-            let hkLower = hkSwimLocationRaw.lowercased()
-            if hkLower.contains("openwater") || hkLower.contains("open_water") {
-                return true
-            }
-            let lower = swimLocationRaw.lowercased()
-            if lower.contains("openwater") || lower.contains("open_water") {
-                return true
-            }
-            return false
-        }()
+        let swimmingLocationType = resolveSwimmingLocationType(from: json)
 
         let activityType: HKWorkoutActivityType = .swimming
-        let location: HKWorkoutSessionLocationType = isOpenWater ? .outdoor : .indoor
+        let location: HKWorkoutSessionLocationType
+        switch swimmingLocationType {
+        case .pool:
+            location = .indoor
+        case .openWater:
+            location = .outdoor
+        case .unknown:
+            location = .unknown
+        @unknown default:
+            location = .unknown
+        }
 
-        print("[Bridge] swimLocationType=\(swimLocationRaw) hkSwimLocationType=\(hkSwimLocationRaw) isOpenWater=\(isOpenWater)")
+        print("[Bridge] swimmingLocationType=\(swimmingLocationType.rawValue) resolvedLocation=\(location.rawValue)")
 
         print("[Bridge] Parsed workout -> activity: \(activityType.rawValue), location: \(location.rawValue)")
 
@@ -287,6 +284,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         return createCustomWorkout(
             activity: activityType,
             location: location,
+            swimmingLocation: swimmingLocationType,
             displayName: displayName,
             warmup: warmupStep,
             blocks: intervalBlocks,
@@ -465,6 +463,54 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         case "surfing":             return .surfingSports
         default:
             return .running
+        }
+    }
+
+    private func resolveSwimmingLocationType(from json: [String: Any]) -> HKWorkoutSwimmingLocationType {
+        if let value = json["hkWorkoutSwimmingLocationType"] as? Int,
+           let type = HKWorkoutSwimmingLocationType(rawValue: value) {
+            return type
+        }
+
+        if let stringValue = json["hkWorkoutSwimmingLocationType"] as? String,
+           let type = swimmingLocationType(from: stringValue) {
+            return type
+        }
+
+        if let value = json["swimmingLocationType"] as? Int,
+           let type = HKWorkoutSwimmingLocationType(rawValue: value) {
+            return type
+        }
+
+        if let stringValue = json["swimmingLocationType"] as? String,
+           let type = swimmingLocationType(from: stringValue) {
+            return type
+        }
+
+        return .unknown
+    }
+
+    private func swimmingLocationType(from rawString: String) -> HKWorkoutSwimmingLocationType? {
+        let normalized = rawString
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .lowercased()
+
+        if let numericValue = Int(normalized),
+           let type = HKWorkoutSwimmingLocationType(rawValue: numericValue) {
+            return type
+        }
+
+        switch normalized {
+        case "hkworkoutswimminglocationtypepool", "pool", "indoor", "lappool":
+            return .pool
+        case "hkworkoutswimminglocationtypeopenwater", "openwater", "openwateroutdoor":
+            return .openWater
+        case "hkworkoutswimminglocationtypeunknown", "unknown":
+            return .unknown
+        default:
+            return nil
         }
     }
 
@@ -1587,6 +1633,7 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
 private func createCustomWorkout(
     activity: HKWorkoutActivityType,
     location: HKWorkoutSessionLocationType,
+    swimmingLocation: HKWorkoutSwimmingLocationType,
     displayName: String,
     warmup: WorkoutStep? = nil,
     blocks: [IntervalBlock] = [],
@@ -1595,6 +1642,7 @@ private func createCustomWorkout(
     return CustomWorkout(
         activity: activity,
         location: location,
+        swimmingLocation: swimmingLocation,
         displayName: displayName,
         warmup: warmup,
         blocks: blocks,
