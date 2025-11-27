@@ -1639,15 +1639,16 @@ private func createCustomWorkout(
     blocks: [IntervalBlock] = [],
     cooldown: WorkoutStep? = nil
 ) -> CustomWorkout {
-    return CustomWorkout(
+    var customWorkout = CustomWorkout(
         activity: activity,
         location: location,
-        swimmingLocation: swimmingLocation,
         displayName: displayName,
         warmup: warmup,
         blocks: blocks,
         cooldown: cooldown
     )
+    customWorkout.swimmingLocation = swimmingLocation
+    return customWorkout
 }
 
 @available(iOS 17.0, *)
