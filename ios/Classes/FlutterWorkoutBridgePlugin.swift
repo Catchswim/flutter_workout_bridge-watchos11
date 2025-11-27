@@ -284,7 +284,6 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         return createCustomWorkout(
             activity: activityType,
             location: location,
-            swimmingLocation: swimmingLocationType,
             displayName: displayName,
             warmup: warmupStep,
             blocks: intervalBlocks,
@@ -1633,13 +1632,12 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
 private func createCustomWorkout(
     activity: HKWorkoutActivityType,
     location: HKWorkoutSessionLocationType,
-    swimmingLocation: HKWorkoutSwimmingLocationType,
     displayName: String,
     warmup: WorkoutStep? = nil,
     blocks: [IntervalBlock] = [],
     cooldown: WorkoutStep? = nil
 ) -> CustomWorkout {
-    var customWorkout = CustomWorkout(
+    return CustomWorkout(
         activity: activity,
         location: location,
         displayName: displayName,
@@ -1647,8 +1645,6 @@ private func createCustomWorkout(
         blocks: blocks,
         cooldown: cooldown
     )
-    customWorkout.swimmingLocation = swimmingLocation
-    return customWorkout
 }
 
 @available(iOS 17.0, *)
