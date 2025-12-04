@@ -264,20 +264,75 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             warmupStep = try parseWorkoutStepAsWorkoutStep(stepData: warmupData, stepType: .warmup)
         }
 
-        if let intervalsArray = json["intervals"] as? [[String: Any]] {
-            var intervalSteps: [IntervalStep] = []
-            for intervalData in intervalsArray {
-                let intervalStep = try parseWorkoutStep(stepData: intervalData, stepType: .interval)
-                intervalSteps.append(intervalStep)
-            }
+        var orderedBlocks: [(order: Int, block: IntervalBlock)] = []
 
-            if !intervalSteps.isEmpty {
-                var block = IntervalBlock()
-                block.steps = intervalSteps
-                block.iterations = 1
-                intervalBlocks.append(block)
+        var repeatGroupIds: Set<String> = []
+        if let blocksArray = json["blocks"] as? [[String: Any]] {
+            for blockData in blocksArray {
+                guard let stepArray = blockData["steps"] as? [[String: Any]] else { continue }
+                let iterations = max(1, blockData["iterations"] as? Int ?? 1)
+                let orderValue = blockData["order"] as? Int ?? Int.max
+
+                var steps: [IntervalStep] = []
+                for stepData in stepArray {
+                    if let groupId = stepData["repeatGroupId"] as? String {
+                        repeatGroupIds.insert(groupId)
+                    }
+                    let intervalStep = try parseWorkoutStep(stepData: stepData, stepType: .interval)
+                    steps.append(intervalStep)
+                }
+
+                if !steps.isEmpty {
+                    var block = IntervalBlock()
+                    block.steps = steps
+                    block.iterations = iterations
+                    orderedBlocks.append((orderValue, block))
+                }
             }
         }
+
+        if let intervalsArray = json["intervals"] as? [[String: Any]] {
+            var pendingSteps: [(order: Int, data: [String: Any])] = []
+
+            func flushPending() throws {
+                guard !pendingSteps.isEmpty else { return }
+                let sorted = pendingSteps.sorted { $0.order < $1.order }
+                var steps: [IntervalStep] = []
+                for item in sorted {
+                    let intervalStep = try parseWorkoutStep(stepData: item.data, stepType: .interval)
+                    steps.append(intervalStep)
+                }
+                if !steps.isEmpty {
+                    var block = IntervalBlock()
+                    block.steps = steps
+                    block.iterations = 1
+                    let orderValue = sorted.first?.order ?? Int.max
+                    orderedBlocks.append((orderValue, block))
+                }
+                pendingSteps.removeAll()
+            }
+
+            for intervalData in intervalsArray {
+                if let groupId = intervalData["repeatGroupId"] as? String,
+                   repeatGroupIds.contains(groupId) {
+                    // This step is represented inside a repeat block; skip here
+                    continue
+                }
+                let orderValue = intervalData["order"] as? Int ?? Int.max
+                pendingSteps.append((order: orderValue, data: intervalData))
+            }
+
+            try flushPending()
+        }
+
+        if orderedBlocks.isEmpty {
+            // Fallback: no intervals and no blocks -> throw error
+            throw WorkoutError.invalidWorkoutData("Workout contained no interval blocks")
+        }
+
+        intervalBlocks = orderedBlocks
+            .sorted { $0.order < $1.order }
+            .map { $0.block }
 
         if let cooldownData = json["cooldown"] as? [String: Any] {
             cooldownStep = try parseWorkoutStepAsWorkoutStep(stepData: cooldownData, stepType: .cooldown)
