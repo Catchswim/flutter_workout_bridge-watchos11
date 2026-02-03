@@ -320,6 +320,9 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 }
                 let orderValue = intervalData["order"] as? Int ?? Int.max
                 pendingSteps.append((order: orderValue, data: intervalData))
+                
+                // Flush immediately to prevent bundling across repeat blocks
+                try flushPending()
             }
 
             try flushPending()
