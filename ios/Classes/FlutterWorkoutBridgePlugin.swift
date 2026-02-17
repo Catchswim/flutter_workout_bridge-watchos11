@@ -101,6 +101,13 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 return
             }
             getCompletedWorkouts(daysBack: daysBack, result: result)
+        case "getSessionLinksByPlanIds":
+            guard let args = call.arguments as? [String: Any],
+                  let planIds = args["planIds"] as? [String] else {
+                result(FlutterError(code: "INVALID_ARGUMENTS", message: "Invalid planIds parameter", details: nil))
+                return
+            }
+            getSessionLinksByPlanIds(planIds: planIds, result: result)
         case "getScheduledWorkouts":
             getScheduledWorkouts(result: result)
         case "clearScheduledWorkouts":
@@ -652,12 +659,26 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
             print("✅ Workout scheduled successfully!")
 
+            // Persist plan-id -> session-id mapping so sync can deterministically recover
+            // linkage without relying on HealthKit metadata round-trip.
+            if let sessionLink = json["catch_session_id"]
+                ?? (json["metadata"] as? [String: Any])?["com.catchapp.workout.session_id"]
+                ?? (json["metadata"] as? [String: Any])?["HKExternalUUID"] {
+                storeWorkoutPlanSessionLink(
+                    planId: String(describing: workoutPlan.id),
+                    sessionId: sessionLink,
+                    activityType: customWorkout.activity.rawValue,
+                    scheduledTime: scheduledDate.timeIntervalSince1970
+                )
+            }
+
             let scheduledWorkouts = try? await WorkoutScheduler.shared.scheduledWorkouts
             print("Number of scheduled workouts: \(scheduledWorkouts?.count ?? 0)")
 
             storeRecentWorkoutInfo(
                 customWorkout: customWorkout,
                 scheduledDate: scheduledDate,
+                workoutPlanId: String(describing: workoutPlan.id),
                 metadata: scheduleDebug,
                 json: json
             )
@@ -667,6 +688,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                     "success": true,
                     "message": "Workout scheduled! It will appear in your Apple Watch Workout app at the planned time. Make sure your iPhone and Watch are paired and nearby.",
                     "workoutName": customWorkout.displayName,
+                    "workoutPlanId": String(describing: workoutPlan.id),
                     "scheduledDate": iso8601FormatterWithFractional.string(from: scheduledDate),
                     "instructions": "Open the Workout app on your Apple Watch and scroll to the bottom to find your custom workout."
                 ])
@@ -732,6 +754,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
     private func storeRecentWorkoutInfo(
         customWorkout: CustomWorkout,
         scheduledDate: Date?,
+        workoutPlanId: String? = nil,
         metadata: [String: Any]? = nil,
         json: [String: Any]? = nil
     ) {
@@ -749,6 +772,10 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             "activityType": customWorkout.activity.rawValue,
             "scheduledTime": (scheduledDate ?? Date()).timeIntervalSince1970
         ]
+        if let workoutPlanId,
+           !workoutPlanId.isEmpty {
+            workoutInfo["workout_plan_id"] = workoutPlanId
+        }
 
         if let metadata,
            let sessionId = metadata["com.catchapp.workout.session_id"] {
@@ -788,6 +815,38 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         defaults.synchronize()
 
         print("Stored recent workout \(customWorkout.displayName), total recent: \(recentWorkouts.count)")
+    }
+
+    private func storeWorkoutPlanSessionLink(
+        planId: String,
+        sessionId: Any,
+        activityType: UInt,
+        scheduledTime: Double
+    ) {
+        guard !planId.isEmpty else { return }
+        let defaults = UserDefaults.standard
+        var links = defaults.dictionary(forKey: "WorkoutPlanSessionLinks") as? [String: [String: Any]] ?? [:]
+        links[planId] = [
+            "session_id": sessionId,
+            "activity_type": activityType,
+            "scheduled_time": scheduledTime,
+            "updated_at": Date().timeIntervalSince1970,
+        ]
+        defaults.set(links, forKey: "WorkoutPlanSessionLinks")
+        defaults.synchronize()
+    }
+
+    private func getSessionLinksByPlanIds(planIds: [String], result: @escaping FlutterResult) {
+        let defaults = UserDefaults.standard
+        let links = defaults.dictionary(forKey: "WorkoutPlanSessionLinks") as? [String: [String: Any]] ?? [:]
+        var out: [String: Any] = [:]
+        for planId in planIds where !planId.isEmpty {
+            if let entry = links[planId],
+               let sessionId = entry["session_id"] {
+                out[planId] = sessionId
+            }
+        }
+        result(out)
     }
 
     @available(iOS 17.0, *)
