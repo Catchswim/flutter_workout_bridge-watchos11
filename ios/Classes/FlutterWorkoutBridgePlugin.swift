@@ -549,6 +549,19 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 scheduleDebug["resolvedSource"] = resolved.source
                 scheduleDebug["resolvedIso"] = iso8601FormatterWithFractional.string(from: resolved.date)
             }
+            // Carry session linkage identifiers forward into the metadata bucket we persist
+            // alongside recent workouts, so we can recover linkage even if HealthKit
+            // metadata is missing on readback.
+            if let sessionId = json["catch_session_id"] {
+                scheduleDebug["com.catchapp.workout.session_id"] = sessionId
+            } else if let meta = json["metadata"] as? [String: Any],
+                      let sessionId = meta["com.catchapp.workout.session_id"] {
+                scheduleDebug["com.catchapp.workout.session_id"] = sessionId
+            }
+            if let meta = json["metadata"] as? [String: Any],
+               let externalId = meta["HKExternalUUID"] {
+                scheduleDebug["HKExternalUUID"] = externalId
+            }
             if let timezone = json["scheduledTimezone"] as? String,
                !timezone.isEmpty {
                 scheduleDebug["timezone"] = timezone
@@ -812,17 +825,13 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             return nil
         }
 
-        let workoutStartTime = workout.startDate.timeIntervalSince1970
-
-        for recentWorkout in recentWorkouts {
-            if let scheduledTime = recentWorkout["scheduledTime"] as? Double,
-               let name = recentWorkout["name"] as? String,
-               let activityType = recentWorkout["activityType"] as? UInt,
-               abs(scheduledTime - workoutStartTime) < 7200, // Within 2 hours
-               activityType == workout.workoutActivityType.rawValue {
-                print("Found matching custom workout: \(name)")
-                return name
-            }
+        if let best = bestMatchingRecentWorkout(
+            for: workout,
+            from: recentWorkouts,
+            maxTimeDelta: 60 * 60 * 24 * 7 // up to 7 days
+        ), let name = best["name"] as? String {
+            print("Found matching custom workout: \(name)")
+            return name
         }
 
         return nil
@@ -835,18 +844,52 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             return nil
         }
 
-        let workoutStartTime = workout.startDate.timeIntervalSince1970
-
-        for recentWorkout in recentWorkouts {
-            if let scheduledTime = recentWorkout["scheduledTime"] as? Double,
-               let activityType = recentWorkout["activityType"] as? UInt,
-               abs(scheduledTime - workoutStartTime) < 7200, // Within 2 hours
-               activityType == workout.workoutActivityType.rawValue {
-                return recentWorkout["catch_session_id"]
-            }
+        if let best = bestMatchingRecentWorkout(
+            for: workout,
+            from: recentWorkouts,
+            maxTimeDelta: 60 * 60 * 24 * 7 // up to 7 days
+        ) {
+            return best["catch_session_id"]
         }
 
         return nil
+    }
+
+    private func bestMatchingRecentWorkout(
+        for workout: HKWorkout,
+        from recentWorkouts: [[String: Any]],
+        maxTimeDelta: Double
+    ) -> [String: Any]? {
+        let workoutStartTime = workout.startDate.timeIntervalSince1970
+        let activityRaw = workout.workoutActivityType.rawValue
+
+        var best: [String: Any]? = nil
+        var bestDelta = Double.greatestFiniteMagnitude
+
+        for recentWorkout in recentWorkouts {
+            guard let scheduledTime = recentWorkout["scheduledTime"] as? Double,
+                  let activityType = recentWorkout["activityType"] as? UInt,
+                  activityType == activityRaw else {
+                continue
+            }
+
+            let delta = abs(scheduledTime - workoutStartTime)
+            if delta > maxTimeDelta { continue }
+
+            if delta < bestDelta {
+                bestDelta = delta
+                best = recentWorkout
+            } else if delta == bestDelta {
+                // Prefer rows that actually have linkage data when deltas tie.
+                let currentHasSession = recentWorkout["catch_session_id"] != nil
+                let bestHasSession = best?["catch_session_id"] != nil
+                if currentHasSession && !bestHasSession {
+                    best = recentWorkout
+                }
+            }
+        }
+
+        return best
     }
 
     // MARK: - HealthKit Data Retrieval
