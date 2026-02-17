@@ -740,10 +740,19 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         if let metadata,
            let sessionId = metadata["com.catchapp.workout.session_id"] {
             workoutInfo["catch_session_id"] = sessionId
+        } else if let metadata,
+                  let sessionId = metadata["HKExternalUUID"] {
+            workoutInfo["catch_session_id"] = sessionId
         } else if let sessionId = json?["catch_session_id"] {
             workoutInfo["catch_session_id"] = sessionId
         } else if let meta = json?["metadata"] as? [String: Any],
                   let sessionId = meta["com.catchapp.workout.session_id"] {
+            workoutInfo["catch_session_id"] = sessionId
+        } else if let meta = json?["metadata"] as? [String: Any],
+                  let sessionId = meta["HKExternalUUID"] {
+            workoutInfo["catch_session_id"] = sessionId
+        } else if let meta = json?["metadata"] as? [String: Any],
+                  let sessionId = meta["HKMetadataKeyExternalUUID"] {
             workoutInfo["catch_session_id"] = sessionId
         }
 
@@ -1036,6 +1045,10 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         json["isCustomWorkout"] = isCustomWorkout
 
         if let sessionId = workout.metadata?["com.catchapp.workout.session_id"] {
+            json["catch_session_id"] = sessionId
+        } else if let sessionId = workout.metadata?["HKExternalUUID"] {
+            json["catch_session_id"] = sessionId
+        } else if let sessionId = workout.metadata?["HKMetadataKeyExternalUUID"] {
             json["catch_session_id"] = sessionId
         } else if let sessionId = findCustomWorkoutSessionId(for: workout) {
             json["catch_session_id"] = sessionId
