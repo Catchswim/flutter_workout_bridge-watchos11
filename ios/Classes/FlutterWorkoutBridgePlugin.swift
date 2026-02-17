@@ -735,6 +735,16 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             "scheduledTime": (scheduledDate ?? Date()).timeIntervalSince1970
         ]
 
+        if let metadata,
+           let sessionId = metadata["com.catchapp.workout.session_id"] {
+            workoutInfo["catch_session_id"] = sessionId
+        } else if let sessionId = json["catch_session_id"] {
+            workoutInfo["catch_session_id"] = sessionId
+        } else if let meta = json["metadata"] as? [String: Any],
+                  let sessionId = meta["com.catchapp.workout.session_id"] {
+            workoutInfo["catch_session_id"] = sessionId
+        }
+
         if let scheduledDate {
             workoutInfo["scheduledIso"] = iso8601FormatterWithFractional.string(from: scheduledDate)
         }
@@ -801,6 +811,27 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                activityType == workout.workoutActivityType.rawValue {
                 print("Found matching custom workout: \(name)")
                 return name
+            }
+        }
+
+        return nil
+    }
+
+    private func findCustomWorkoutSessionId(for workout: HKWorkout) -> Any? {
+        let defaults = UserDefaults.standard
+
+        guard let recentWorkouts = defaults.object(forKey: "RecentCustomWorkouts") as? [[String: Any]] else {
+            return nil
+        }
+
+        let workoutStartTime = workout.startDate.timeIntervalSince1970
+
+        for recentWorkout in recentWorkouts {
+            if let scheduledTime = recentWorkout["scheduledTime"] as? Double,
+               let activityType = recentWorkout["activityType"] as? UInt,
+               abs(scheduledTime - workoutStartTime) < 7200, // Within 2 hours
+               activityType == workout.workoutActivityType.rawValue {
+                return recentWorkout["catch_session_id"]
             }
         }
 
@@ -1001,6 +1032,12 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
         json["name"] = workoutName
         json["isCustomWorkout"] = isCustomWorkout
+
+        if let sessionId = workout.metadata?["com.catchapp.workout.session_id"] {
+            json["catch_session_id"] = sessionId
+        } else if let sessionId = findCustomWorkoutSessionId(for: workout) {
+            json["catch_session_id"] = sessionId
+        }
 
         if let totalEnergyBurned = workout.totalEnergyBurned {
             json["totalEnergyBurned"] = totalEnergyBurned.doubleValue(for: .kilocalorie())
