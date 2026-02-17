@@ -645,7 +645,8 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             storeRecentWorkoutInfo(
                 customWorkout: customWorkout,
                 scheduledDate: scheduledDate,
-                metadata: scheduleDebug
+                metadata: scheduleDebug,
+                json: json
             )
 
             DispatchQueue.main.async {
@@ -718,7 +719,8 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
     private func storeRecentWorkoutInfo(
         customWorkout: CustomWorkout,
         scheduledDate: Date?,
-        metadata: [String: Any]? = nil
+        metadata: [String: Any]? = nil,
+        json: [String: Any]? = nil
     ) {
         let defaults = UserDefaults.standard
 
@@ -738,9 +740,9 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         if let metadata,
            let sessionId = metadata["com.catchapp.workout.session_id"] {
             workoutInfo["catch_session_id"] = sessionId
-        } else if let sessionId = json["catch_session_id"] {
+        } else if let sessionId = json?["catch_session_id"] {
             workoutInfo["catch_session_id"] = sessionId
-        } else if let meta = json["metadata"] as? [String: Any],
+        } else if let meta = json?["metadata"] as? [String: Any],
                   let sessionId = meta["com.catchapp.workout.session_id"] {
             workoutInfo["catch_session_id"] = sessionId
         }
