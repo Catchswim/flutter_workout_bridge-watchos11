@@ -411,7 +411,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 guard let meters = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing distance duration")
                 }
-                let goal = WorkoutGoal.distance(meters, .meters)
+                let goal = distanceGoal(metres: meters, unit: stepData["distanceUnit"] as? String)
                 var step = IntervalStep(purpose)
                 let displayName = extractDisplayName(from: stepData)
                 if #available(iOS 18.0, *), let displayName {
@@ -478,7 +478,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 guard let meters = stepData["duration"] as? Double else {
                     throw WorkoutError.invalidWorkoutData("Missing distance duration")
                 }
-                let goal = WorkoutGoal.distance(meters, .meters)
+                let goal = distanceGoal(metres: meters, unit: stepData["distanceUnit"] as? String)
                 let displayName = extractDisplayName(from: stepData)
                 if #available(iOS 18.0, *), let displayName {
                     return WorkoutStep(goal: goal, displayName: displayName)
@@ -1794,6 +1794,24 @@ class WorkoutPreviewFlutterView: NSObject, FlutterPlatformView {
 }
 
 // MARK: - Helper Functions
+
+@available(iOS 17.0, *)
+private func distanceGoal(metres: Double, unit: String?) -> WorkoutGoal {
+    // Step distances always arrive from the app in metres - that is the
+    // canonical unit everywhere in Catch - with distanceUnit saying what the
+    // swimmer actually reads. WorkoutKit takes the unit as part of the goal, so
+    // an imperial swimmer gets a 25 yd goal rather than a 22.86 m one.
+    //
+    // Anything that is not "yd", including an older app build that sends no
+    // distanceUnit at all, stays exactly as it was.
+    guard (unit ?? "m").lowercased() == "yd" else {
+        return WorkoutGoal.distance(metres, .meters)
+    }
+    let yards = Measurement(value: metres, unit: UnitLength.meters).converted(to: .yards).value
+    // Two decimals only to absorb floating-point noise: 22.86 m is exactly
+    // 25 yd, and should not reach the watch as 24.999999.
+    return WorkoutGoal.distance((yards * 100).rounded() / 100, .yards)
+}
 
 @available(iOS 17.0, *)
 private func createCustomWorkout(
