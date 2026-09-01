@@ -1257,8 +1257,15 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         print("- Route end: \(route.endDate)")
 
         var locationPoints: [[String: Any]] = []
+        // Route points arrive in repeated batches and Apple does not document
+        // which queue delivers them, so treat them like every other shared
+        // collection in this file: all mutation on one serial queue. The
+        // serial queue also preserves batch order, and the done == true batch
+        // is queued last, so completion still fires after every append.
+        let routeQueue = DispatchQueue(label: "routePointsMerge", qos: .userInitiated)
 
         let query = HKWorkoutRouteQuery(route: route) { query, locationsOrNil, done, errorOrNil in
+          routeQueue.async {
 
             if let error = errorOrNil {
                 print("ERROR: Error reading route locations: \(error.localizedDescription)")
@@ -1294,6 +1301,7 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
                 print("SUCCESS: Route processing completed with \(locationPoints.count) points")
                 completion(locationPoints.isEmpty ? nil : routeData)
             }
+          }
         }
 
         healthStore.execute(query)
@@ -1469,17 +1477,21 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
     }
 
     /// Converts a value into something FlutterStandardMessageCodec can encode.
-    /// Strings, numbers and booleans pass through; dates become ISO8601
-    /// strings; HKQuantity keeps its own description (value + unit); arrays
-    /// and dictionaries are converted element by element; anything else falls
-    /// back to its string description. The codec crashes the process on any
-    /// unsupported type, so this must stay total.
+    /// Strings, numbers, booleans, nulls and raw byte data pass through
+    /// (the codec supports all of them natively); dates become ISO8601
+    /// strings; arrays and dictionaries are converted element by element;
+    /// anything else falls back to its string description. The codec crashes
+    /// the process on any unsupported type, so this must stay total.
     private func channelSafeValue(_ value: Any) -> Any {
         switch value {
         case let string as String:
             return string
         case let number as NSNumber:
             return number
+        case is NSNull:
+            return value
+        case let data as Data:
+            return data
         case let date as Date:
             return ISO8601DateFormatter().string(from: date)
         case let array as [Any]:
