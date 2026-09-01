@@ -1,6 +1,21 @@
 
 # Changelog
 
+## [1.0.4] - 2026-09-01
+
+### Fixed
+- The completed-workout sync (`getCompletedWorkouts`) no longer crashes the
+  host app. All writes to shared collections - the workout list, the
+  per-workout detail dictionary, the metrics dictionary and the GPS route
+  points - now go through serial queues instead of being mutated from
+  concurrent HealthKit callbacks (a data race that corrupted memory and
+  killed the process).
+- Values crossing the platform channel are now converted to codec-safe types
+  first (`channelSafeValue`): dates become ISO8601 strings and unknown types
+  become their string description instead of raising a fatal
+  `NSInternalInconsistencyException` ("Unsupported value for standard codec").
+  Applied to workout-event metadata and session-id metadata values.
+
 ## [1.0.3] - 2025-09-08
 
 ### Changed
