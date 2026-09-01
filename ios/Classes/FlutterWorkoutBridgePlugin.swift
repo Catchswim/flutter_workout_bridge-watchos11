@@ -1054,9 +1054,15 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
                 workoutQueue.async {
                     self?.getDetailedWorkoutData(workout: workout) { workoutData in
-                        workoutDataArray.append(workoutData)
-                        print("Processed workout \(index + 1)/\(workouts.count): \(workoutData["name"] ?? "Unknown")")
-                        group.leave()
+                        // The completions arrive on concurrent queues; a Swift
+                        // Array is not safe to mutate from two threads at once,
+                        // so every append is funnelled through the serial
+                        // workoutQueue.
+                        workoutQueue.async {
+                            workoutDataArray.append(workoutData)
+                            print("Processed workout \(index + 1)/\(workouts.count): \(workoutData["name"] ?? "Unknown")")
+                            group.leave()
+                        }
                     }
                 }
             }
@@ -1084,29 +1090,42 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         var workoutData = workoutToJson(workout: workout)
 
         let group = DispatchGroup()
+        // The four fetches below finish on whatever queue HealthKit calls back
+        // on, all at roughly the same time. A Swift Dictionary is not safe to
+        // mutate from two threads at once, so every write goes through this
+        // serial queue.
+        let mergeQueue = DispatchQueue(label: "workoutDataMerge", qos: .userInitiated)
 
         group.enter()
         getWorkoutRoute(for: workout) { routeData in
-            workoutData["route"] = routeData
-            group.leave()
+            mergeQueue.async {
+                workoutData["route"] = routeData
+                group.leave()
+            }
         }
 
         group.enter()
         getWorkoutHeartRateData(for: workout) { heartRateData in
-            workoutData["heartRate"] = heartRateData
-            group.leave()
+            mergeQueue.async {
+                workoutData["heartRate"] = heartRateData
+                group.leave()
+            }
         }
 
         group.enter()
         getWorkoutMetrics(for: workout) { metrics in
-            workoutData["metrics"] = metrics
-            group.leave()
+            mergeQueue.async {
+                workoutData["metrics"] = metrics
+                group.leave()
+            }
         }
 
         group.enter()
         getWorkoutEvents(for: workout) { events in
-            workoutData["events"] = events
-            group.leave()
+            mergeQueue.async {
+                workoutData["events"] = events
+                group.leave()
+            }
         }
 
         group.notify(queue: .global(qos: .userInitiated)) {
@@ -1146,14 +1165,17 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
         json["name"] = workoutName
         json["isCustomWorkout"] = isCustomWorkout
 
+        // These values come from HealthKit metadata (or UserDefaults built
+        // from it) with no type guarantee, and this dictionary is sent over
+        // the platform channel - convert to a codec-safe type first.
         if let sessionId = workout.metadata?["com.catchapp.workout.session_id"] {
-            json["catch_session_id"] = sessionId
+            json["catch_session_id"] = channelSafeValue(sessionId)
         } else if let sessionId = workout.metadata?["HKExternalUUID"] {
-            json["catch_session_id"] = sessionId
+            json["catch_session_id"] = channelSafeValue(sessionId)
         } else if let sessionId = workout.metadata?["HKMetadataKeyExternalUUID"] {
-            json["catch_session_id"] = sessionId
+            json["catch_session_id"] = channelSafeValue(sessionId)
         } else if let sessionId = findCustomWorkoutSessionId(for: workout) {
-            json["catch_session_id"] = sessionId
+            json["catch_session_id"] = channelSafeValue(sessionId)
         }
 
         if let totalEnergyBurned = workout.totalEnergyBurned {
@@ -1345,6 +1367,9 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
     private func getWorkoutMetrics(for workout: HKWorkout, completion: @escaping ([String: Any]) -> Void) {
         var metrics: [String: Any] = [:]
         let group = DispatchGroup()
+        // Same rule as getDetailedWorkoutData: the seven queries below finish
+        // concurrently, so writes to the shared dictionary are serialised.
+        let mergeQueue = DispatchQueue(label: "workoutMetricsMerge", qos: .userInitiated)
 
         let metricsToCollect: [(HKQuantityTypeIdentifier, String, HKUnit)] = [
             (.stepCount, "stepCount", .count()),
@@ -1361,10 +1386,12 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
 
             group.enter()
             getQuantityData(for: workout, quantityType: quantityType, unit: unit) { data in
-                if let data = data {
-                    metrics[key] = data
+                mergeQueue.async {
+                    if let data = data {
+                        metrics[key] = data
+                    }
+                    group.leave()
                 }
-                group.leave()
             }
         }
 
@@ -1429,13 +1456,39 @@ public class FlutterWorkoutBridgePlugin: NSObject, FlutterPlugin {
             ]
 
             if let metadata = event.metadata {
-                eventData["metadata"] = metadata
+                // HealthKit metadata values can be Date, HKQuantity and other
+                // types the Flutter message codec rejects with a fatal
+                // NSInternalInconsistencyException, so convert them first.
+                eventData["metadata"] = channelSafeValue(metadata)
             }
 
             return eventData
         }
 
         completion(events)
+    }
+
+    /// Converts a value into something FlutterStandardMessageCodec can encode.
+    /// Strings, numbers and booleans pass through; dates become ISO8601
+    /// strings; HKQuantity keeps its own description (value + unit); arrays
+    /// and dictionaries are converted element by element; anything else falls
+    /// back to its string description. The codec crashes the process on any
+    /// unsupported type, so this must stay total.
+    private func channelSafeValue(_ value: Any) -> Any {
+        switch value {
+        case let string as String:
+            return string
+        case let number as NSNumber:
+            return number
+        case let date as Date:
+            return ISO8601DateFormatter().string(from: date)
+        case let array as [Any]:
+            return array.map { channelSafeValue($0) }
+        case let dictionary as [String: Any]:
+            return dictionary.mapValues { channelSafeValue($0) }
+        default:
+            return String(describing: value)
+        }
     }
 
     // MARK: - Helper Functions
